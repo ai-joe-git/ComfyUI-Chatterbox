@@ -23,8 +23,7 @@ class ChatterboxTTSNode:
     def __init__(self):
         self.model = None
         self.model_type_cache = None
-        # FORCE CPU - XPU causes audio distortion
-        self.device = "cpu"
+        self.device = "cpu"  # FORCE CPU - XPU causes audio distortion
     
     @classmethod
     def INPUT_TYPES(cls):
@@ -54,7 +53,6 @@ class ChatterboxTTSNode:
     def load_model(self, model_type):
         """Load Chatterbox model (CPU-only)"""
         
-        # Check if already loaded
         if self.model is not None and self.model_type_cache == model_type:
             return self.model
         
@@ -62,11 +60,9 @@ class ChatterboxTTSNode:
         print("   ℹ️  CPU inference (XPU disabled due to audio distortion bugs)")
         
         try:
-            # Monkey-patch torch.load to force CPU map_location
             original_load = torch.load
             
             def cpu_load(f, *args, **kwargs):
-                """Force CPU loading for all model weights"""
                 if 'map_location' not in kwargs:
                     kwargs['map_location'] = 'cpu'
                 return original_load(f, *args, **kwargs)
@@ -90,7 +86,6 @@ class ChatterboxTTSNode:
                     print("✅ Chatterbox Base (0.5B - High Quality) loaded on CPU")
                 
             finally:
-                # Restore original torch.load
                 torch.load = original_load
             
             self.model_type_cache = model_type
@@ -108,22 +103,16 @@ class ChatterboxTTSNode:
     
     def normalize_audio(self, waveform, target_peak_db=-3.0):
         """Normalize audio volume"""
-        # Convert to numpy for processing
         audio_np = waveform.squeeze().numpy()
         
-        # Get peak
         peak = np.abs(audio_np).max()
         if peak == 0:
             return waveform
         
-        # Calculate gain to reach target peak
         target_peak = 10 ** (target_peak_db / 20)
         gain = target_peak / peak
         
-        # Apply gain
         audio_np = audio_np * gain
-        
-        # Clip to prevent distortion
         audio_np = np.clip(audio_np, -1.0, 1.0)
         
         return torch.from_numpy(audio_np).unsqueeze(0)
@@ -135,32 +124,27 @@ class ChatterboxTTSNode:
         
         print(f"📝 Text ({len(text)} chars): '{text[:80]}...'")
         
-        # Load model
         model = self.load_model(model_type)
         
         print(f"⚡ Using {model_type.title()} on CPU {'(6x faster than real-time)' if model_type == 'turbo' else ''}")
         
-        # Prepare kwargs
+        # Prepare kwargs - SPEED NOT SUPPORTED BY CHATTERBOX!
         kwargs = {
             "exaggeration": float(exaggeration),
             "cfg_weight": float(cfg_weight),
             "temperature": float(temperature),
-            "speed": float(speed),
             "seed": int(seed),
         }
         
-        # Add language for multilingual
         if model_type == "multilingual":
             kwargs["language"] = language
         
         # Handle reference audio
         temp_path = None
         if reference_audio is not None:
-            # Save reference audio to temp file using soundfile (avoids torchcodec issues)
             ref_waveform = reference_audio["waveform"].cpu().numpy()
             ref_sr = reference_audio["sample_rate"]
             
-            # Ensure correct shape for soundfile (channels, samples) -> (samples, channels)
             if ref_waveform.ndim == 2:
                 ref_waveform = ref_waveform.T
             else:
@@ -174,14 +158,14 @@ class ChatterboxTTSNode:
             print(f"🎵 Using reference audio")
         
         print("⚙️  " + ", ".join([f"{k}={v}" for k, v in list(kwargs.items())[:4]]))
+        if speed != 1.0:
+            print(f"   ℹ️  Speed={speed} (applied post-generation)")
         
         try:
             print("🎙️  Generating on CPU...")
             
-            # Generate
             audio_output = model.generate(text, **kwargs)
             
-            # Clean up temp file
             if temp_path is not None:
                 try:
                     os.unlink(temp_path)
@@ -196,11 +180,22 @@ class ChatterboxTTSNode:
             else:
                 raise ValueError(f"Unexpected audio output type: {type(audio_output)}")
             
-            # Ensure correct shape [1, samples]
             if waveform.dim() == 1:
                 waveform = waveform.unsqueeze(0)
             elif waveform.dim() == 3:
                 waveform = waveform.squeeze(0)
+            
+            # Apply speed change if requested (post-processing)
+            if speed != 1.0:
+                current_length = waveform.shape[1]
+                target_length = int(current_length / speed)
+                
+                waveform = torch.nn.functional.interpolate(
+                    waveform.unsqueeze(0), 
+                    size=target_length, 
+                    mode='linear',
+                    align_corners=False
+                ).squeeze(0)
             
             # Apply gain
             if gain != 1.0:
@@ -210,8 +205,7 @@ class ChatterboxTTSNode:
             if normalize_volume:
                 waveform = self.normalize_audio(waveform, target_peak_db)
             
-            # Get sample rate from model
-            sample_rate = 24000  # Chatterbox output rate
+            sample_rate = 24000
             
             duration = waveform.shape[1] / sample_rate
             print(f"✅ Generated {duration:.2f}s @ {sample_rate}Hz (CPU)")
@@ -220,7 +214,6 @@ class ChatterboxTTSNode:
             
         except Exception as e:
             print(f"❌ Error: {str(e)}")
-            # Clean up temp file on error
             if temp_path is not None:
                 try:
                     os.unlink(temp_path)
@@ -234,17 +227,14 @@ class ChatterboxLoadReferenceAudio:
     
     @classmethod
     def INPUT_TYPES(cls):
-        # Ensure directory exists
         os.makedirs(CHATTERBOX_AUDIO_DIR, exist_ok=True)
         
-        # Get audio files
         try:
             all_files = os.listdir(CHATTERBOX_AUDIO_DIR)
             audio_files = [f for f in all_files 
                           if f.lower().endswith(('.wav', '.mp3', '.flac', '.ogg', '.m4a', '.aac'))]
             
             if not audio_files:
-                # Create a hint file
                 hint_path = os.path.join(CHATTERBOX_AUDIO_DIR, "PUT_AUDIO_FILES_HERE.txt")
                 if not os.path.exists(hint_path):
                     with open(hint_path, 'w') as f:
@@ -282,20 +272,15 @@ class ChatterboxLoadReferenceAudio:
         
         print(f"📂 Loading: {audio_file}")
         
-        # Load using soundfile (more reliable than torchaudio)
         try:
             audio_data, sr = sf.read(audio_path, dtype='float32')
             
-            # Convert to torch tensor
             if audio_data.ndim == 1:
-                # Mono audio
                 waveform = torch.from_numpy(audio_data).unsqueeze(0)
             else:
-                # Stereo/multi-channel - transpose to [channels, samples]
                 waveform = torch.from_numpy(audio_data.T)
             
         except Exception as e:
-            # Fallback to torchaudio
             print(f"  ⚠️  soundfile failed, trying torchaudio: {e}")
             waveform, sr = torchaudio.load(audio_path)
         
@@ -353,7 +338,6 @@ class ChatterboxPresets:
     CATEGORY = "audio/chatterbox"
     
     def get_preset(self, preset):
-        """Return preset values"""
         print(f"🎚️  Preset: {preset}")
         
         values = self.PRESETS[preset]
@@ -375,7 +359,7 @@ class ChatterboxSaveAudio:
             "required": {
                 "audio": ("AUDIO",),
                 "filename_prefix": ("STRING", {"default": "chatterbox_audio"}),
-                "format": (["wav", "flac"],),  # Removed mp3 (needs torchcodec)
+                "format": (["wav", "flac"],),
             }
         }
     
@@ -385,11 +369,8 @@ class ChatterboxSaveAudio:
     CATEGORY = "audio/chatterbox"
     
     def save_audio(self, audio, filename_prefix, format):
-        """Save audio to file using soundfile"""
-        
         output_dir = folder_paths.get_output_directory()
         
-        # Generate filename
         counter = 1
         while True:
             filename = f"{filename_prefix}_{counter:04d}.{format}"
@@ -398,17 +379,14 @@ class ChatterboxSaveAudio:
                 break
             counter += 1
         
-        # Get audio data
         waveform = audio["waveform"].cpu().numpy()
         sample_rate = audio["sample_rate"]
         
-        # Transpose to (samples, channels) for soundfile
         if waveform.ndim == 2:
             waveform = waveform.T
         else:
             waveform = waveform.reshape(-1, 1)
         
-        # Save using soundfile
         sf.write(filepath, waveform, sample_rate, format=format.upper())
         
         print(f"💾 Saved: {filename}")
@@ -416,7 +394,6 @@ class ChatterboxSaveAudio:
         return ()
 
 
-# Node mappings
 NODE_CLASS_MAPPINGS = {
     "ChatterboxTTSNode": ChatterboxTTSNode,
     "ChatterboxLoadReferenceAudio": ChatterboxLoadReferenceAudio,
