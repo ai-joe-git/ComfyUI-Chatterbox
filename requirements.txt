@@ -1,11 +1,18 @@
-torch>=2.0.0
-torchaudio>=2.0.0
+# Audio processing
 soundfile>=0.12.1
+librosa>=0.10.0
 numpy>=1.24.0
 
-# Chatterbox TTS
-chatterbox-tts>=0.1.0
+# Chatterbox dependencies (NO TORCH!)
 transformers==4.46.3
+omegaconf
+safetensors
+huggingface-hub
+s3tokenizer
+conformer
+diffusers
+einops
+gradio
 
-# Optional
-librosa>=0.10.0
+# Note: Assumes PyTorch is already installed via ComfyUI
+# DO NOT add torch/torchaudio here!
