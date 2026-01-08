@@ -3,8 +3,7 @@ soundfile>=0.12.1
 librosa>=0.10.0
 numpy>=1.24.0
 
-# Chatterbox dependencies (NO TORCH!)
-transformers==4.46.3
+# Chatterbox dependencies (NO TORCH, NO TRANSFORMERS VERSION LOCK!)
 omegaconf
 safetensors
 huggingface-hub
@@ -14,5 +13,6 @@ diffusers
 einops
 gradio
 
-# Note: Assumes PyTorch is already installed via ComfyUI
-# DO NOT add torch/torchaudio here!
+# Note: Uses whatever transformers version is already installed
+# Note: Assumes PyTorch XPU is already installed
+
