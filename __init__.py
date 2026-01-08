@@ -14,41 +14,23 @@ def apply_dtype_fix():
         original_log_mel = s3tokenizer.S3Tokenizer.log_mel_spectrogram
         
         def fixed_log_mel_spectrogram(self, wav):
-            """Fixed version that ensures dtype compatibility"""
+            """Fixed version - only fix dtype, don't touch STFT logic"""
             import torch
             
-            # Get STFT parameters from wherever they're stored
-            # S3Tokenizer stores them in config, not as direct attributes
-            if hasattr(self, 'config'):
-                n_fft = self.config.n_fft
-                hop_length = self.config.hop_length
-                win_length = self.config.win_length
-            else:
-                # Fallback to sensible defaults for 16kHz audio
-                n_fft = 400
-                hop_length = 160
-                win_length = 400
-            
-            # Get or create window
-            if hasattr(self, 'window'):
-                window = self.window.to(wav.device)
-            else:
-                window = torch.hann_window(win_length).to(wav.device)
-            
-            # Compute STFT
+            # Use the original STFT computation
             spec = torch.stft(
                 wav,
-                n_fft=n_fft,
-                hop_length=hop_length,
-                win_length=win_length,
-                window=window,
+                n_fft=self.n_fft,
+                hop_length=self.hop_length,
+                win_length=self.win_length,
+                window=self.window.to(wav.device),
                 center=True,
                 return_complex=True
             )
             
             magnitudes = spec.abs()
             
-            # FIX: Ensure mel_filters matches magnitudes dtype (both float32)
+            # THE ONLY FIX: Convert mel_filters to match magnitudes dtype
             mel_filters = self._mel_filters.to(self.device).to(magnitudes.dtype)
             mel_spec = mel_filters @ magnitudes
             
@@ -62,6 +44,9 @@ def apply_dtype_fix():
         
     except ImportError:
         print("⚠️  Chatterbox not installed yet")
+    except AttributeError as e:
+        # If attributes don't exist, skip the fix - maybe it's already fixed
+        print(f"⚠️  Chatterbox dtype fix skipped: {e}")
     except Exception as e:
         print(f"⚠️  Could not apply dtype fix: {e}")
 
