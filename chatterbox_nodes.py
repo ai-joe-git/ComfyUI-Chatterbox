@@ -7,6 +7,7 @@ FORCED CPU INFERENCE (XPU has audio distortion bugs)
 import os
 import torch
 import torchaudio
+import soundfile as sf
 import numpy as np
 import folder_paths
 import tempfile
@@ -155,13 +156,19 @@ class ChatterboxTTSNode:
         # Handle reference audio
         temp_path = None
         if reference_audio is not None:
-            # Save reference audio to temp file
-            ref_waveform = reference_audio["waveform"]
+            # Save reference audio to temp file using soundfile (avoids torchcodec issues)
+            ref_waveform = reference_audio["waveform"].cpu().numpy()
             ref_sr = reference_audio["sample_rate"]
+            
+            # Ensure correct shape for soundfile (channels, samples) -> (samples, channels)
+            if ref_waveform.ndim == 2:
+                ref_waveform = ref_waveform.T
+            else:
+                ref_waveform = ref_waveform.reshape(-1, 1)
             
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
                 temp_path = tmp.name
-                torchaudio.save(temp_path, ref_waveform, ref_sr)
+                sf.write(temp_path, ref_waveform, ref_sr)
             
             kwargs["audio_prompt_path"] = temp_path
             print(f"🎵 Using reference audio")
@@ -232,14 +239,23 @@ class ChatterboxLoadReferenceAudio:
         
         # Get audio files
         try:
-            audio_files = [f for f in os.listdir(CHATTERBOX_AUDIO_DIR) 
-                          if f.lower().endswith(('.wav', '.mp3', '.flac', '.ogg', '.m4a'))]
+            all_files = os.listdir(CHATTERBOX_AUDIO_DIR)
+            audio_files = [f for f in all_files 
+                          if f.lower().endswith(('.wav', '.mp3', '.flac', '.ogg', '.m4a', '.aac'))]
             
             if not audio_files:
+                # Create a hint file
+                hint_path = os.path.join(CHATTERBOX_AUDIO_DIR, "PUT_AUDIO_FILES_HERE.txt")
+                if not os.path.exists(hint_path):
+                    with open(hint_path, 'w') as f:
+                        f.write("Place your reference audio files (.wav, .mp3, .flac) here\n")
+                        f.write("Then restart ComfyUI or refresh the node.\n")
+                
                 audio_files = ["No audio files found"]
+                
         except Exception as e:
-            print(f"⚠️  Error reading audio directory: {e}")
-            audio_files = ["No audio files found"]
+            print(f"⚠️  Error reading audio directory {CHATTERBOX_AUDIO_DIR}: {e}")
+            audio_files = ["Error reading directory"]
         
         return {
             "required": {
@@ -254,11 +270,10 @@ class ChatterboxLoadReferenceAudio:
     def load_audio(self, audio_file):
         """Load reference audio file"""
         
-        if audio_file == "No audio files found":
-            raise ValueError(f"No audio files in {CHATTERBOX_AUDIO_DIR}\n\n"
-                           f"Place audio files (.wav, .mp3, .flac, .ogg, .m4a) in:\n"
-                           f"{CHATTERBOX_AUDIO_DIR}\n\n"
-                           f"Then restart ComfyUI or refresh the node.")
+        if audio_file in ["No audio files found", "Error reading directory"]:
+            raise ValueError(f"No audio files in:\n{CHATTERBOX_AUDIO_DIR}\n\n"
+                           f"Place audio files (.wav, .mp3, .flac, .ogg, .m4a) there,\n"
+                           f"then restart ComfyUI or refresh the node.")
         
         audio_path = os.path.join(CHATTERBOX_AUDIO_DIR, audio_file)
         
@@ -267,7 +282,22 @@ class ChatterboxLoadReferenceAudio:
         
         print(f"📂 Loading: {audio_file}")
         
-        waveform, sr = torchaudio.load(audio_path)
+        # Load using soundfile (more reliable than torchaudio)
+        try:
+            audio_data, sr = sf.read(audio_path, dtype='float32')
+            
+            # Convert to torch tensor
+            if audio_data.ndim == 1:
+                # Mono audio
+                waveform = torch.from_numpy(audio_data).unsqueeze(0)
+            else:
+                # Stereo/multi-channel - transpose to [channels, samples]
+                waveform = torch.from_numpy(audio_data.T)
+            
+        except Exception as e:
+            # Fallback to torchaudio
+            print(f"  ⚠️  soundfile failed, trying torchaudio: {e}")
+            waveform, sr = torchaudio.load(audio_path)
         
         duration = waveform.shape[1] / sr
         print(f"  ↳ {duration:.2f}s @ {sr}Hz")
@@ -345,7 +375,7 @@ class ChatterboxSaveAudio:
             "required": {
                 "audio": ("AUDIO",),
                 "filename_prefix": ("STRING", {"default": "chatterbox_audio"}),
-                "format": (["wav", "mp3", "flac"],),
+                "format": (["wav", "flac"],),  # Removed mp3 (needs torchcodec)
             }
         }
     
@@ -355,7 +385,7 @@ class ChatterboxSaveAudio:
     CATEGORY = "audio/chatterbox"
     
     def save_audio(self, audio, filename_prefix, format):
-        """Save audio to file"""
+        """Save audio to file using soundfile"""
         
         output_dir = folder_paths.get_output_directory()
         
@@ -368,11 +398,18 @@ class ChatterboxSaveAudio:
                 break
             counter += 1
         
-        # Save audio
-        waveform = audio["waveform"]
+        # Get audio data
+        waveform = audio["waveform"].cpu().numpy()
         sample_rate = audio["sample_rate"]
         
-        torchaudio.save(filepath, waveform, sample_rate, format=format)
+        # Transpose to (samples, channels) for soundfile
+        if waveform.ndim == 2:
+            waveform = waveform.T
+        else:
+            waveform = waveform.reshape(-1, 1)
+        
+        # Save using soundfile
+        sf.write(filepath, waveform, sample_rate, format=format.upper())
         
         print(f"💾 Saved: {filename}")
         
