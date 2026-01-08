@@ -1,9 +1,9 @@
-# Audio processing (safe - no torch dependency)
+# Audio processing
 soundfile>=0.12.1
 librosa>=0.10.0
 numpy>=1.24.0
 
-# Chatterbox dependencies ONLY (manually listed, NO TORCH)
+# Chatterbox dependencies
 omegaconf
 safetensors
 huggingface-hub
@@ -13,5 +13,9 @@ diffusers
 einops
 gradio
 
-# NOTE: chatterbox-tts is NOT in requirements.txt!
-# Install it separately with --no-deps (see install.bat)
+# ⚠️ IMPORTANT: Perth watermarking (required by chatterbox)
+resemble-perth
+
+# Note: Does NOT include torch/torchaudio (uses ComfyUI's existing PyTorch)
+# Note: chatterbox-tts installed separately with --no-deps (see install.bat)
+
