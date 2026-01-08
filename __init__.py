@@ -49,32 +49,18 @@ def apply_dtype_fix():
         
         s3tokenizer.S3Tokenizer.log_mel_spectrogram = fixed_s3_log_mel_spectrogram
         
-        # ========== FIX 2: VoiceEncoder mel spectrogram ==========
-        original_ve_log_mel = voice_encoder.VoiceEncoder.log_mel_spectrogram
+        # ========== FIX 2: VoiceEncoder forward (LSTM input) ==========
+        original_forward = voice_encoder.VoiceEncoder.forward
         
-        def fixed_ve_log_mel_spectrogram(self, wav):
-            """Fixed VoiceEncoder version - ensure float32 output"""
-            # Call original and force float32
-            result = original_ve_log_mel(self, wav)
-            if isinstance(result, torch.Tensor):
-                return result.to(torch.float32)
-            return result
-        
-        voice_encoder.VoiceEncoder.log_mel_spectrogram = fixed_ve_log_mel_spectrogram
-        
-        # ========== FIX 3: VoiceEncoder inference ==========
-        original_inference = voice_encoder.VoiceEncoder.inference
-        
-        def fixed_inference(self, mels, mel_lens=None, batch_size=64, **kwargs):
-            """Fixed inference - force float32 input"""
-            # Ensure mels are float32 before passing to LSTM
+        def fixed_forward(self, mels):
+            """Fixed VoiceEncoder forward - force float32 before LSTM"""
             if isinstance(mels, torch.Tensor):
                 mels = mels.to(torch.float32)
-            return original_inference(self, mels, mel_lens, batch_size, **kwargs)
+            return original_forward(self, mels)
         
-        voice_encoder.VoiceEncoder.inference = fixed_inference
+        voice_encoder.VoiceEncoder.forward = fixed_forward
         
-        print("✅ Chatterbox dtype fix applied (S3Tokenizer + VoiceEncoder + Inference)")
+        print("✅ Chatterbox dtype fix applied (S3Tokenizer + VoiceEncoder)")
         
     except ImportError:
         print("⚠️  Chatterbox not installed yet")
