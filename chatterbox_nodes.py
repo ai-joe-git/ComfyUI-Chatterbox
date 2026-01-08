@@ -2,6 +2,7 @@
 ComfyUI-Chatterbox Nodes
 Text-to-Speech using Resemble AI's Chatterbox models
 FORCED CPU INFERENCE (XPU has audio distortion bugs)
+✅ Fixed: ComfyUI standard audio format [batch, channels, samples]
 """
 
 import os
@@ -102,20 +103,27 @@ class ChatterboxTTSNode:
                              "  pip install transformers==4.46.3 --force-reinstall")
     
     def normalize_audio(self, waveform, target_peak_db=-3.0):
-        """Normalize audio volume"""
-        audio_np = waveform.squeeze().numpy()
+        """Normalize audio volume - expects [batch, channels, samples]"""
+        # Handle batch dimension
+        if waveform.dim() == 3:
+            audio_np = waveform[0, 0].cpu().numpy()  # Get first batch, first channel
+        elif waveform.dim() == 2:
+            audio_np = waveform[0].cpu().numpy()  # Get first channel
+        else:
+            audio_np = waveform.cpu().numpy()
         
         peak = np.abs(audio_np).max()
         if peak == 0:
             return waveform
         
         target_peak = 10 ** (target_peak_db / 20)
-        gain = target_peak / peak
+        gain_factor = target_peak / peak
         
-        audio_np = audio_np * gain
-        audio_np = np.clip(audio_np, -1.0, 1.0)
+        # Apply gain to original tensor
+        waveform = waveform * gain_factor
+        waveform = torch.clamp(waveform, -1.0, 1.0)
         
-        return torch.from_numpy(audio_np).unsqueeze(0)
+        return waveform
     
     def generate_speech(self, text, model_type, language, exaggeration, cfg_weight, 
                        temperature, speed, normalize_volume, target_peak_db, gain, seed,
@@ -128,8 +136,6 @@ class ChatterboxTTSNode:
         
         print(f"⚡ Using {model_type.title()} on CPU {'(6x faster than real-time)' if model_type == 'turbo' else ''}")
         
-        # ONLY pass supported parameters to Chatterbox!
-        # Chatterbox DOES NOT support: speed, seed
         kwargs = {
             "exaggeration": float(exaggeration),
             "cfg_weight": float(cfg_weight),
@@ -142,17 +148,22 @@ class ChatterboxTTSNode:
         # Handle reference audio
         temp_path = None
         if reference_audio is not None:
-            ref_waveform = reference_audio["waveform"].cpu().numpy()
+            ref_waveform = reference_audio["waveform"].cpu()
             ref_sr = reference_audio["sample_rate"]
             
-            if ref_waveform.ndim == 2:
-                ref_waveform = ref_waveform.T
+            # Convert [batch, channels, samples] to [samples, channels] for saving
+            if ref_waveform.dim() == 3:
+                ref_waveform = ref_waveform[0].transpose(0, 1)  # [channels, samples] -> [samples, channels]
+            elif ref_waveform.dim() == 2:
+                ref_waveform = ref_waveform.transpose(0, 1)
             else:
-                ref_waveform = ref_waveform.reshape(-1, 1)
+                ref_waveform = ref_waveform.unsqueeze(1)
+            
+            ref_np = ref_waveform.numpy()
             
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
                 temp_path = tmp.name
-                sf.write(temp_path, ref_waveform, ref_sr)
+                sf.write(temp_path, ref_np, ref_sr)
             
             kwargs["audio_prompt_path"] = temp_path
             print(f"🎵 Using reference audio")
@@ -167,7 +178,6 @@ class ChatterboxTTSNode:
         try:
             print("🎙️  Generating on CPU...")
             
-            # Generate with ONLY supported parameters
             audio_output = model.generate(text, **kwargs)
             
             if temp_path is not None:
@@ -176,30 +186,44 @@ class ChatterboxTTSNode:
                 except:
                     pass
             
-            # Process output
-            if isinstance(audio_output, torch.Tensor):
-                waveform = audio_output
-            elif isinstance(audio_output, np.ndarray):
-                waveform = torch.from_numpy(audio_output)
+            # Convert to tensor
+            if isinstance(audio_output, np.ndarray):
+                waveform = torch.from_numpy(audio_output).float()
+            elif isinstance(audio_output, torch.Tensor):
+                waveform = audio_output.float()
             else:
                 raise ValueError(f"Unexpected audio output type: {type(audio_output)}")
             
+            # ===== FIX: Ensure ComfyUI format [batch, channels, samples] =====
             if waveform.dim() == 1:
-                waveform = waveform.unsqueeze(0)
+                # [samples] -> [1, 1, samples]
+                waveform = waveform.unsqueeze(0).unsqueeze(0)
+            elif waveform.dim() == 2:
+                # Check if [channels, samples] or [samples, channels]
+                if waveform.shape[0] < waveform.shape[1]:
+                    # Likely [channels, samples] -> [1, channels, samples]
+                    waveform = waveform.unsqueeze(0)
+                else:
+                    # Likely [samples, channels] -> transpose and add batch
+                    waveform = waveform.transpose(0, 1).unsqueeze(0)
             elif waveform.dim() == 3:
-                waveform = waveform.squeeze(0)
+                # Already [batch, channels, samples]
+                pass
+            else:
+                raise ValueError(f"Unexpected waveform dimensions: {waveform.shape}")
             
             # Apply speed change (post-processing)
             if speed != 1.0:
-                current_length = waveform.shape[1]
+                current_length = waveform.shape[2]  # samples dimension
                 target_length = int(current_length / speed)
                 
+                # Interpolate along samples dimension
                 waveform = torch.nn.functional.interpolate(
-                    waveform.unsqueeze(0), 
+                    waveform, 
                     size=target_length, 
                     mode='linear',
                     align_corners=False
-                ).squeeze(0)
+                )
             
             # Apply gain
             if gain != 1.0:
@@ -211,8 +235,9 @@ class ChatterboxTTSNode:
             
             sample_rate = 24000
             
-            duration = waveform.shape[1] / sample_rate
+            duration = waveform.shape[2] / sample_rate  # samples is last dimension
             print(f"✅ Generated {duration:.2f}s @ {sample_rate}Hz (CPU)")
+            print(f"   📊 Output shape: {list(waveform.shape)} [batch, channels, samples]")
             
             return ({"waveform": waveform, "sample_rate": sample_rate},)
             
@@ -280,16 +305,22 @@ class ChatterboxLoadReferenceAudio:
             audio_data, sr = sf.read(audio_path, dtype='float32')
             
             if audio_data.ndim == 1:
-                waveform = torch.from_numpy(audio_data).unsqueeze(0)
+                # Mono: [samples] -> [1, 1, samples]
+                waveform = torch.from_numpy(audio_data).unsqueeze(0).unsqueeze(0)
             else:
-                waveform = torch.from_numpy(audio_data.T)
+                # Stereo: [samples, channels] -> [1, channels, samples]
+                waveform = torch.from_numpy(audio_data.T).unsqueeze(0)
             
         except Exception as e:
             print(f"  ⚠️  soundfile failed, trying torchaudio: {e}")
             waveform, sr = torchaudio.load(audio_path)
+            
+            # torchaudio loads as [channels, samples], add batch dimension
+            if waveform.dim() == 2:
+                waveform = waveform.unsqueeze(0)  # [1, channels, samples]
         
-        duration = waveform.shape[1] / sr
-        print(f"  ↳ {duration:.2f}s @ {sr}Hz")
+        duration = waveform.shape[2] / sr
+        print(f"  ↳ {duration:.2f}s @ {sr}Hz, shape: {list(waveform.shape)}")
         
         return ({"waveform": waveform, "sample_rate": sr},)
 
@@ -383,13 +414,19 @@ class ChatterboxSaveAudio:
                 break
             counter += 1
         
-        waveform = audio["waveform"].cpu().numpy()
+        waveform = audio["waveform"].cpu()
         sample_rate = audio["sample_rate"]
         
-        if waveform.ndim == 2:
-            waveform = waveform.T
+        # Convert [batch, channels, samples] -> [samples, channels] for saving
+        if waveform.dim() == 3:
+            # Take first batch: [batch, channels, samples] -> [channels, samples] -> [samples, channels]
+            waveform = waveform[0].transpose(0, 1).numpy()
+        elif waveform.dim() == 2:
+            # [channels, samples] -> [samples, channels]
+            waveform = waveform.transpose(0, 1).numpy()
         else:
-            waveform = waveform.reshape(-1, 1)
+            # [samples] -> [samples, 1]
+            waveform = waveform.unsqueeze(1).numpy()
         
         sf.write(filepath, waveform, sample_rate, format=format.upper())
         
