@@ -12,10 +12,7 @@ conformer
 diffusers
 einops
 gradio
-
-# ⚠️ IMPORTANT: Perth watermarking (required by chatterbox)
 resemble-perth
 
-# Note: Does NOT include torch/torchaudio (uses ComfyUI's existing PyTorch)
-# Note: chatterbox-tts installed separately with --no-deps (see install.bat)
-
+# Note: chatterbox-tts installed separately via install.py
+# Note: torch/torchaudio use ComfyUI's existing installation
