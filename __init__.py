@@ -11,4 +11,12 @@ from .chatterbox_nodes import (
     NODE_DISPLAY_NAME_MAPPINGS
 )
 
+# Apply XPU dtype fix
+try:
+    from .xpu_dtype_fix import apply_xpu_dtype_patch
+    apply_xpu_dtype_patch()
+except Exception as e:
+    print(f"Note: XPU dtype patch not applied: {e}")
+
+
 __all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS']
