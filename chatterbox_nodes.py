@@ -1,7 +1,7 @@
 """
 ComfyUI-Chatterbox Nodes
 Text-to-Speech using Resemble AI's Chatterbox models
-Intel Arc XPU Compatible
+FORCED CPU INFERENCE (XPU has audio distortion bugs)
 """
 
 import os
@@ -17,21 +17,13 @@ CHATTERBOX_AUDIO_DIR = os.path.join(folder_paths.base_path, "input", "chatterbox
 os.makedirs(CHATTERBOX_AUDIO_DIR, exist_ok=True)
 
 class ChatterboxTTSNode:
-    """Main TTS node with voice cloning"""
+    """Main TTS node with voice cloning (CPU-only)"""
     
     def __init__(self):
         self.model = None
         self.model_type_cache = None
-        self.device = self._get_device()
-    
-    def _get_device(self):
-        """Get best available device"""
-        if torch.cuda.is_available():
-            return "cuda"
-        elif hasattr(torch, 'xpu') and torch.xpu.is_available():
-            return "xpu"
-        else:
-            return "cpu"
+        # FORCE CPU - XPU causes audio distortion
+        self.device = "cpu"
     
     @classmethod
     def INPUT_TYPES(cls):
@@ -59,27 +51,46 @@ class ChatterboxTTSNode:
     CATEGORY = "audio/chatterbox"
     
     def load_model(self, model_type):
-        """Load Chatterbox model with XPU support"""
+        """Load Chatterbox model (CPU-only)"""
         
         # Check if already loaded
         if self.model is not None and self.model_type_cache == model_type:
             return self.model
         
-        print(f"🎙️ Loading Chatterbox {model_type.title()}...")
+        print(f"🎙️  Loading Chatterbox {model_type.title()} on CPU...")
+        print("   ℹ️  CPU inference (XPU disabled due to audio distortion bugs)")
         
         try:
-            if model_type == "turbo":
-                from chatterbox.tts_turbo import ChatterboxTurboTTS
-                self.model = ChatterboxTurboTTS.from_pretrained(device=self.device)
-                print("✅ Chatterbox Turbo (350M - 6x faster) loaded")
-            elif model_type == "multilingual":
-                from chatterbox.tts_multilingual import ChatterboxMultilingualTTS
-                self.model = ChatterboxMultilingualTTS.from_pretrained(device=self.device)
-                print("✅ Chatterbox Multilingual (23 languages) loaded")
-            else:  # base
-                from chatterbox.tts import ChatterboxTTS
-                self.model = ChatterboxTTS.from_pretrained(device=self.device)
-                print("✅ Chatterbox Base (0.5B - High Quality) loaded")
+            # Monkey-patch torch.load to force CPU map_location
+            original_load = torch.load
+            
+            def cpu_load(f, *args, **kwargs):
+                """Force CPU loading for all model weights"""
+                if 'map_location' not in kwargs:
+                    kwargs['map_location'] = 'cpu'
+                return original_load(f, *args, **kwargs)
+            
+            torch.load = cpu_load
+            
+            try:
+                if model_type == "turbo":
+                    from chatterbox.tts_turbo import ChatterboxTurboTTS
+                    self.model = ChatterboxTurboTTS.from_pretrained(device="cpu")
+                    print("✅ Chatterbox Turbo (350M - 6x faster) loaded on CPU")
+                    
+                elif model_type == "multilingual":
+                    from chatterbox.tts_multilingual import ChatterboxMultilingualTTS
+                    self.model = ChatterboxMultilingualTTS.from_pretrained(device="cpu")
+                    print("✅ Chatterbox Multilingual (23 languages) loaded on CPU")
+                    
+                else:  # base
+                    from chatterbox.tts import ChatterboxTTS
+                    self.model = ChatterboxTTS.from_pretrained(device="cpu")
+                    print("✅ Chatterbox Base (0.5B - High Quality) loaded on CPU")
+                
+            finally:
+                # Restore original torch.load
+                torch.load = original_load
             
             self.model_type_cache = model_type
             print("   💡 Supports paralinguistic tags: [laugh], [chuckle], [sigh], [gasp], [cough]")
@@ -93,27 +104,6 @@ class ChatterboxTTSNode:
                              "  pip install git+https://github.com/resemble-ai/chatterbox.git\n\n"
                              "If transformers error:\n"
                              "  pip install transformers==4.46.3 --force-reinstall")
-    
-    def process_audio(self, audio_path, target_sr=24000):
-        """Load and process reference audio"""
-        print("🎵 Processing reference audio...")
-        
-        # Load audio
-        waveform, sr = torchaudio.load(audio_path)
-        print(f"  ↳ Loaded: {waveform.shape[1]/sr:.2f}s @ {sr}Hz")
-        
-        # Convert to mono
-        if waveform.shape[0] > 1:
-            waveform = torch.mean(waveform, dim=0, keepdim=True)
-            print("  ↳ Converted to mono")
-        
-        # Resample if needed
-        if sr != target_sr:
-            print(f"  ↳ Resampling {sr}Hz → {target_sr}Hz")
-            resampler = torchaudio.transforms.Resample(sr, target_sr)
-            waveform = resampler(waveform)
-        
-        return waveform, target_sr
     
     def normalize_audio(self, waveform, target_peak_db=-3.0):
         """Normalize audio volume"""
@@ -147,7 +137,7 @@ class ChatterboxTTSNode:
         # Load model
         model = self.load_model(model_type)
         
-        print(f"⚡ Using {model_type.title()} {'(6x faster than real-time)' if model_type == 'turbo' else ''}")
+        print(f"⚡ Using {model_type.title()} on CPU {'(6x faster than real-time)' if model_type == 'turbo' else ''}")
         
         # Prepare kwargs
         kwargs = {
@@ -163,6 +153,7 @@ class ChatterboxTTSNode:
             kwargs["language"] = language
         
         # Handle reference audio
+        temp_path = None
         if reference_audio is not None:
             # Save reference audio to temp file
             ref_waveform = reference_audio["waveform"]
@@ -173,18 +164,22 @@ class ChatterboxTTSNode:
                 torchaudio.save(temp_path, ref_waveform, ref_sr)
             
             kwargs["audio_prompt_path"] = temp_path
+            print(f"🎵 Using reference audio")
         
-        print("⚙️  " + ", ".join([f"{k}={v}" for k, v in list(kwargs.items())[:3]]))
+        print("⚙️  " + ", ".join([f"{k}={v}" for k, v in list(kwargs.items())[:4]]))
         
         try:
-            print("🎙️  Generating...")
+            print("🎙️  Generating on CPU...")
             
             # Generate
             audio_output = model.generate(text, **kwargs)
             
             # Clean up temp file
-            if reference_audio is not None:
-                os.unlink(temp_path)
+            if temp_path is not None:
+                try:
+                    os.unlink(temp_path)
+                except:
+                    pass
             
             # Process output
             if isinstance(audio_output, torch.Tensor):
@@ -212,12 +207,18 @@ class ChatterboxTTSNode:
             sample_rate = 24000  # Chatterbox output rate
             
             duration = waveform.shape[1] / sample_rate
-            print(f"✅ Generated {duration:.2f}s @ {sample_rate}Hz")
+            print(f"✅ Generated {duration:.2f}s @ {sample_rate}Hz (CPU)")
             
             return ({"waveform": waveform, "sample_rate": sample_rate},)
             
         except Exception as e:
             print(f"❌ Error: {str(e)}")
+            # Clean up temp file on error
+            if temp_path is not None:
+                try:
+                    os.unlink(temp_path)
+                except:
+                    pass
             raise RuntimeError(f"Error generating speech: {str(e)}")
 
 
@@ -226,15 +227,23 @@ class ChatterboxLoadReferenceAudio:
     
     @classmethod
     def INPUT_TYPES(cls):
-        audio_files = [f for f in os.listdir(CHATTERBOX_AUDIO_DIR) 
-                      if f.lower().endswith(('.wav', '.mp3', '.flac', '.ogg'))]
+        # Ensure directory exists
+        os.makedirs(CHATTERBOX_AUDIO_DIR, exist_ok=True)
         
-        if not audio_files:
+        # Get audio files
+        try:
+            audio_files = [f for f in os.listdir(CHATTERBOX_AUDIO_DIR) 
+                          if f.lower().endswith(('.wav', '.mp3', '.flac', '.ogg', '.m4a'))]
+            
+            if not audio_files:
+                audio_files = ["No audio files found"]
+        except Exception as e:
+            print(f"⚠️  Error reading audio directory: {e}")
             audio_files = ["No audio files found"]
         
         return {
             "required": {
-                "audio_file": (audio_files,),
+                "audio_file": (sorted(audio_files),),
             }
         }
     
@@ -246,9 +255,15 @@ class ChatterboxLoadReferenceAudio:
         """Load reference audio file"""
         
         if audio_file == "No audio files found":
-            raise ValueError(f"No audio files in {CHATTERBOX_AUDIO_DIR}")
+            raise ValueError(f"No audio files in {CHATTERBOX_AUDIO_DIR}\n\n"
+                           f"Place audio files (.wav, .mp3, .flac, .ogg, .m4a) in:\n"
+                           f"{CHATTERBOX_AUDIO_DIR}\n\n"
+                           f"Then restart ComfyUI or refresh the node.")
         
         audio_path = os.path.join(CHATTERBOX_AUDIO_DIR, audio_file)
+        
+        if not os.path.exists(audio_path):
+            raise ValueError(f"Audio file not found: {audio_path}")
         
         print(f"📂 Loading: {audio_file}")
         
@@ -373,7 +388,7 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "ChatterboxTTSNode": "Chatterbox TTS",
+    "ChatterboxTTSNode": "Chatterbox TTS (CPU)",
     "ChatterboxLoadReferenceAudio": "Load Reference Audio (Chatterbox)",
     "ChatterboxPresets": "Chatterbox Presets",
     "ChatterboxSaveAudio": "Save Audio (Chatterbox)",
