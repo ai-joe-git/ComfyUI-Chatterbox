@@ -23,6 +23,6 @@ Arabic • Danish • German • Greek • English • Spanish • Finnish • F
 ### Manual
 ```bash
 cd ComfyUI/custom_nodes
-git clone https://github.com/YOUR_USERNAME/ComfyUI-Chatterbox.git
+git clone https://github.com/ai-joe-git/ComfyUI-Chatterbox.git
 cd ComfyUI-Chatterbox
 pip install -r requirements.txt
