@@ -1,9 +1,9 @@
-# Audio processing
+# Audio processing (safe - no torch dependency)
 soundfile>=0.12.1
 librosa>=0.10.0
 numpy>=1.24.0
 
-# Chatterbox dependencies (NO TORCH, NO TRANSFORMERS VERSION LOCK!)
+# Chatterbox dependencies ONLY (manually listed, NO TORCH)
 omegaconf
 safetensors
 huggingface-hub
@@ -13,6 +13,5 @@ diffusers
 einops
 gradio
 
-# Note: Uses whatever transformers version is already installed
-# Note: Assumes PyTorch XPU is already installed
-
+# NOTE: chatterbox-tts is NOT in requirements.txt!
+# Install it separately with --no-deps (see install.bat)
