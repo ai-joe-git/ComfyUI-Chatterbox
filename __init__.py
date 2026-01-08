@@ -15,16 +15,33 @@ def apply_dtype_fix():
         
         def fixed_log_mel_spectrogram(self, wav):
             """Fixed version that ensures dtype compatibility"""
-            # Call original but fix the dtype issue
             import torch
             
-            # Get STFT parameters
+            # Get STFT parameters from wherever they're stored
+            # S3Tokenizer stores them in config, not as direct attributes
+            if hasattr(self, 'config'):
+                n_fft = self.config.n_fft
+                hop_length = self.config.hop_length
+                win_length = self.config.win_length
+            else:
+                # Fallback to sensible defaults for 16kHz audio
+                n_fft = 400
+                hop_length = 160
+                win_length = 400
+            
+            # Get or create window
+            if hasattr(self, 'window'):
+                window = self.window.to(wav.device)
+            else:
+                window = torch.hann_window(win_length).to(wav.device)
+            
+            # Compute STFT
             spec = torch.stft(
                 wav,
-                n_fft=self.n_fft,
-                hop_length=self.hop_length,
-                win_length=self.win_length,
-                window=self.window.to(wav.device),
+                n_fft=n_fft,
+                hop_length=hop_length,
+                win_length=win_length,
+                window=window,
                 center=True,
                 return_complex=True
             )
