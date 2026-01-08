@@ -1,28 +1,24 @@
 """
 Installation script for ComfyUI-Chatterbox
-Handles XPU-safe installation
+Handles CPU-safe installation
 """
 
 import subprocess
 import sys
 
 def install():
-    """Install Chatterbox with XPU compatibility"""
-    
     print("="*60)
     print("Installing ComfyUI-Chatterbox")
     print("="*60)
     print()
     
-    # Install base requirements
     print("1/2 Installing dependencies...")
     subprocess.check_call([
         sys.executable, "-m", "pip", "install", 
         "-r", "requirements.txt"
     ])
     
-    # Install chatterbox-tts without deps (preserves PyTorch)
-    print("\n2/2 Installing chatterbox-tts (XPU-safe)...")
+    print("\n2/2 Installing chatterbox-tts (CPU-safe)...")
     subprocess.check_call([
         sys.executable, "-m", "pip", "install",
         "chatterbox-tts", "--no-deps"
