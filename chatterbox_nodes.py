@@ -32,7 +32,7 @@ class ChatterboxTTSNode:
                 "text": ("STRING", {"multiline": True, "default": "Hello! This is Chatterbox."}),
                 "model_type": (["turbo", "base", "multilingual"],),
                 "language": (["en", "es", "fr", "de", "it", "pt", "pl", "tr", "ru", "nl", "cs", "ar", "zh", "ja", "ko", "hu", "hi"],),
-                "exaggeration": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.1}),
+                "exaggeration": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 2.0, "step": 0.1}),
                 "cfg_weight": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.1}),
                 "temperature": ("FLOAT", {"default": 0.8, "min": 0.1, "max": 2.0, "step": 0.1}),
                 "speed": ("FLOAT", {"default": 1.0, "min": 0.5, "max": 2.0, "step": 0.1}),
@@ -128,16 +128,16 @@ class ChatterboxTTSNode:
         
         print(f"⚡ Using {model_type.title()} on CPU {'(6x faster than real-time)' if model_type == 'turbo' else ''}")
         
-        # Prepare kwargs - SPEED NOT SUPPORTED BY CHATTERBOX!
+        # ONLY pass supported parameters to Chatterbox!
+        # Chatterbox DOES NOT support: speed, seed
         kwargs = {
             "exaggeration": float(exaggeration),
             "cfg_weight": float(cfg_weight),
             "temperature": float(temperature),
-            "seed": int(seed),
         }
         
         if model_type == "multilingual":
-            kwargs["language"] = language
+            kwargs["language_id"] = language
         
         # Handle reference audio
         temp_path = None
@@ -157,13 +157,17 @@ class ChatterboxTTSNode:
             kwargs["audio_prompt_path"] = temp_path
             print(f"🎵 Using reference audio")
         
-        print("⚙️  " + ", ".join([f"{k}={v}" for k, v in list(kwargs.items())[:4]]))
+        print(f"⚙️  exaggeration={exaggeration}, cfg_weight={cfg_weight}, temperature={temperature}")
         if speed != 1.0:
-            print(f"   ℹ️  Speed={speed} (applied post-generation)")
+            print(f"   ℹ️  Speed={speed} (post-processing)")
+        if seed != 0:
+            torch.manual_seed(seed)
+            print(f"   ℹ️  Seed={seed} (PyTorch RNG)")
         
         try:
             print("🎙️  Generating on CPU...")
             
+            # Generate with ONLY supported parameters
             audio_output = model.generate(text, **kwargs)
             
             if temp_path is not None:
@@ -185,7 +189,7 @@ class ChatterboxTTSNode:
             elif waveform.dim() == 3:
                 waveform = waveform.squeeze(0)
             
-            # Apply speed change if requested (post-processing)
+            # Apply speed change (post-processing)
             if speed != 1.0:
                 current_length = waveform.shape[1]
                 target_length = int(current_length / speed)
