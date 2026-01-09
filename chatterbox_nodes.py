@@ -80,15 +80,20 @@ class ChatterboxTTSNode:
                 elif model_type == "multilingual":
                     from chatterbox.mtl_tts import ChatterboxMultilingualTTS
 
-                    # ✅ FIX: Force eager attention to support output_attentions
-                    # SDPA doesn't support attention outputs needed by Chatterbox
-                    import os
+                    # ✅ FIX: Force eager attention via environment variable
+                    # This prevents SDPA incompatibility with output_attentions
                     os.environ['TRANSFORMERS_ATTN_IMPLEMENTATION'] = 'eager'
 
-                    self.model = ChatterboxMultilingualTTS.from_pretrained(
-                        device="cpu",
-                        attn_implementation="eager"  # Force eager attention
-                    )
+                    # Load without attn_implementation param (not exposed by Chatterbox)
+                    self.model = ChatterboxMultilingualTTS.from_pretrained(device="cpu")
+
+                    # Force eager attention on all transformer models in the pipeline
+                    if hasattr(self.model, 't3') and hasattr(self.model.t3, 'tfmr'):
+                        # Set _attn_implementation on the underlying transformer
+                        if hasattr(self.model.t3.tfmr, 'config'):
+                            self.model.t3.tfmr.config._attn_implementation = 'eager'
+                            print("   ℹ️  Forced eager attention on T3 transformer")
+
                     print("✅ Chatterbox Multilingual (23 languages) loaded on CPU")
                     print("   ℹ️  Using eager attention (required for voice cloning)")
 
