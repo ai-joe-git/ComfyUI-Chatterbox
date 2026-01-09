@@ -77,7 +77,7 @@ class ChatterboxTTSNode:
                     print("✅ Chatterbox Turbo (350M - 6x faster) loaded on CPU")
                     
                 elif model_type == "multilingual":
-                    from chatterbox.tts_multilingual import ChatterboxMultilingualTTS
+                    from chatterbox.mtl_tts import ChatterboxMultilingualTTS
                     self.model = ChatterboxMultilingualTTS.from_pretrained(device="cpu")
                     print("✅ Chatterbox Multilingual (23 languages) loaded on CPU")
                     
