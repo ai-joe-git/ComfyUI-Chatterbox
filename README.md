@@ -15,11 +15,6 @@ Arabic • Danish • German • Greek • English • Spanish • Finnish • F
 
 ## 📦 Installation
 
-### ComfyUI Manager
-1. Open ComfyUI Manager
-2. Search "Chatterbox"
-3. Install
-
 ### Manual
 ```bash
 cd ComfyUI/custom_nodes
